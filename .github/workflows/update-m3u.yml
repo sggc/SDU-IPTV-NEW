@@ -8,6 +8,10 @@ on:
   push:
     branches: [ main, master ]
 
+# 添加权限设置
+permissions:
+  contents: write
+
 jobs:
   update-m3u:
     runs-on: ubuntu-latest
@@ -16,7 +20,8 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
       with:
-        token: ${{ secrets.GITHUB_TOKEN }}
+        # 移除token参数，使用默认权限
+        fetch-depth: 0
         
     - name: Set up Python
       uses: actions/setup-python@v4
