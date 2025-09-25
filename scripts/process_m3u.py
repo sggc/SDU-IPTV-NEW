@@ -1,20 +1,57 @@
 #!/usr/bin/env python3
 import requests
 import re
+import hashlib
+import os
 from datetime import datetime
 
 # ==================== 需要您修改的配置 ====================
-# 请将下面的URL替换为实际的M3U文件地址
 SOURCE_M3U_URL = "https://raw.githubusercontent.com/plsy1/iptv/refs/heads/main/unicast.m3u"
-# 输出的M3U文件名
 OUTPUT_FILENAME = "playlist.m3u"
+# 存储源文件hash的文件
+HASH_FILE = "source_hash.txt"
 # =======================================================
 
 class M3UProcessor:
-    def __init__(self, source_url, output_file):
+    def __init__(self, source_url, output_file, hash_file):
         self.source_url = source_url
         self.output_file = output_file
+        self.hash_file = hash_file
         self.channels = []
+    
+    def get_content_hash(self, content):
+        """计算内容的MD5哈希值"""
+        return hashlib.md5(content.encode('utf-8')).hexdigest()
+    
+    def get_previous_hash(self):
+        """获取之前保存的源文件哈希值"""
+        if os.path.exists(self.hash_file):
+            with open(self.hash_file, 'r', encoding='utf-8') as f:
+                return f.read().strip()
+        return None
+    
+    def save_current_hash(self, content):
+        """保存当前源文件的哈希值"""
+        current_hash = self.get_content_hash(content)
+        with open(self.hash_file, 'w', encoding='utf-8') as f:
+            f.write(current_hash)
+        return current_hash
+    
+    def has_source_changed(self, content):
+        """检查源文件是否发生变化"""
+        current_hash = self.get_content_hash(content)
+        previous_hash = self.get_previous_hash()
+        
+        if previous_hash is None:
+            print("首次运行，没有之前的哈希记录")
+            return True
+        
+        if current_hash == previous_hash:
+            print("源文件没有变化，跳过处理")
+            return False
+        else:
+            print(f"源文件发生变化: 旧哈希 {previous_hash[:8]}... -> 新哈希 {current_hash[:8]}...")
+            return True
     
     def download_file(self):
         """下载M3U文件"""
@@ -71,10 +108,7 @@ class M3UProcessor:
     
     def move_channel_after_target(self, source_keywords, target_keywords):
         """将源频道移动到目标频道后面"""
-        # 查找山东卫视
         shandong_idx = self.find_channel_index(source_keywords)
-        
-        # 查找CCTV4K
         cctv4k_idx = self.find_channel_index(target_keywords)
         
         if shandong_idx == -1:
@@ -88,19 +122,15 @@ class M3UProcessor:
         print(f"找到山东卫视: 位置 {shandong_idx}, 频道名: {self.channels[shandong_idx]['name']}")
         print(f"找到CCTV4K: 位置 {cctv4k_idx}, 频道名: {self.channels[cctv4k_idx]['name']}")
         
-        # 如果山东卫视已经在CCTV4K后面，不需要移动
         if shandong_idx == cctv4k_idx + 1:
             print("山东卫视已经在CCTV4K后面，无需移动")
             return True
         
-        # 移除山东卫视
         shandong_channel = self.channels.pop(shandong_idx)
         
-        # 调整目标索引
         if shandong_idx < cctv4k_idx:
             cctv4k_idx -= 1
         
-        # 在CCTV4K后面插入山东卫视
         insert_position = cctv4k_idx + 1
         self.channels.insert(insert_position, shandong_channel)
         
@@ -127,21 +157,35 @@ class M3UProcessor:
     def process(self):
         """主处理流程"""
         try:
-            # 下载并解析
+            # 下载源文件
             content = self.download_file()
+            
+            # 检查源文件是否发生变化
+            if not self.has_source_changed(content):
+                print("源文件没有变化，跳过处理")
+                # 创建空文件或保持原文件
+                if not os.path.exists(self.output_file):
+                    with open(self.output_file, 'w', encoding='utf-8') as f:
+                        f.write("# 源文件没有变化，保持原样\n")
+                return True
+            
+            # 解析和处理内容
             self.parse_m3u(content)
             print(f"解析完成，共 {len(self.channels)} 个频道")
             
-            # 移动山东卫视到CCTV4K后面
+            # 移动频道
             success = self.move_channel_after_target(
-                source_keywords=['山东卫视', '山东台'],  # 可以添加多个关键词
-                target_keywords=['CCTV4K', 'CCTV-4K']  # 可以添加多个关键词
+                source_keywords=['山东卫视', '山东台'],
+                target_keywords=['CCTV4K', 'CCTV-4K']
             )
             
             # 生成新内容并保存
             new_content = self.generate_m3u_content()
             with open(self.output_file, 'w', encoding='utf-8') as f:
                 f.write(new_content)
+            
+            # 保存当前哈希值
+            self.save_current_hash(content)
             
             print(f"处理完成，已保存到 {self.output_file}")
             return True
@@ -153,7 +197,7 @@ class M3UProcessor:
             return False
 
 def main():
-    processor = M3UProcessor(SOURCE_M3U_URL, OUTPUT_FILENAME)
+    processor = M3UProcessor(SOURCE_M3U_URL, OUTPUT_FILENAME, HASH_FILE)
     success = processor.process()
     
     if not success:
