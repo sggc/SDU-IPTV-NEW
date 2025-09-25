@@ -8,7 +8,6 @@ from datetime import datetime
 # ==================== 需要您修改的配置 ====================
 SOURCE_M3U_URL = "https://raw.githubusercontent.com/plsy1/iptv/refs/heads/main/unicast.m3u"
 OUTPUT_FILENAME = "playlist.m3u"
-# 存储源文件hash的文件
 HASH_FILE = "source_hash.txt"
 # =======================================================
 
@@ -82,6 +81,8 @@ class M3UProcessor:
                     'extinf': line,
                     'url': None,
                     'name': self.extract_channel_name(line),
+                    'tvg_name': self.extract_tvg_attribute(line, 'tvg-name'),
+                    'group_title': self.extract_tvg_attribute(line, 'group-title'),
                     'original_index': len(self.channels)
                 }
             elif not line.startswith('#') and current_channel:
@@ -99,43 +100,140 @@ class M3UProcessor:
             return match.group(1).strip()
         return ""
     
-    def find_channel_index(self, keywords):
-        """根据关键词查找频道索引"""
-        for i, channel in enumerate(self.channels):
-            if any(keyword in channel['name'] for keyword in keywords):
-                return i
-        return -1
+    def extract_tvg_attribute(self, extinf_line, attribute_name):
+        """提取tvg属性值"""
+        pattern = f'{attribute_name}="([^"]*)"'
+        match = re.search(pattern, extinf_line)
+        if match:
+            return match.group(1)
+        return ""
     
-    def move_channel_after_target(self, source_keywords, target_keywords):
-        """将源频道移动到目标频道后面"""
-        shandong_idx = self.find_channel_index(source_keywords)
-        cctv4k_idx = self.find_channel_index(target_keywords)
+    def update_group_title(self, channel, new_group_title):
+        """更新频道的group-title属性"""
+        old_extinf = channel['extinf']
         
-        if shandong_idx == -1:
-            print(f"警告: 未找到包含 {source_keywords} 的频道")
-            return False
+        # 更新group-title属性
+        if 'group-title=' in old_extinf:
+            # 替换现有的group-title
+            new_extinf = re.sub(
+                r'group-title="[^"]*"',
+                f'group-title="{new_group_title}"',
+                old_extinf
+            )
+        else:
+            # 添加group-title属性
+            new_extinf = old_extinf.replace(
+                '#EXTINF:-1 ',
+                f'#EXTINF:-1 group-title="{new_group_title}" '
+            )
         
-        if cctv4k_idx == -1:
-            print(f"警告: 未找到包含 {target_keywords} 的频道")
-            return False
+        channel['extinf'] = new_extinf
+        channel['group_title'] = new_group_title
+        return new_extinf
+    
+    def find_channel_indices(self, name_patterns, group_patterns=None, exclude_patterns=None):
+        """查找匹配的频道索引"""
+        indices = []
+        for i, channel in enumerate(self.channels):
+            name_match = any(pattern in channel['name'] for pattern in name_patterns)
+            
+            group_match = True
+            if group_patterns:
+                group_match = any(pattern in (channel['group_title'] or '') for pattern in group_patterns)
+            
+            exclude_match = False
+            if exclude_patterns:
+                exclude_match = any(pattern in channel['name'] for pattern in exclude_patterns)
+            
+            if name_match and group_match and not exclude_match:
+                indices.append(i)
         
-        print(f"找到山东卫视: 位置 {shandong_idx}, 频道名: {self.channels[shandong_idx]['name']}")
-        print(f"找到CCTV4K: 位置 {cctv4k_idx}, 频道名: {self.channels[cctv4k_idx]['name']}")
+        return indices
+    
+    def process_channels(self):
+        """主处理逻辑"""
+        print("开始处理频道排序和分类...")
         
-        if shandong_idx == cctv4k_idx + 1:
-            print("山东卫视已经在CCTV4K后面，无需移动")
-            return True
+        # 1. 将CGTN相关频道改为"其他频道"
+        cgtn_indices = self.find_channel_indices(
+            name_patterns=['CGTN'],
+            group_patterns=None  # 不限制原分组
+        )
         
-        shandong_channel = self.channels.pop(shandong_idx)
+        for idx in cgtn_indices:
+            old_group = self.channels[idx]['group_title'] or '未知分组'
+            self.update_group_title(self.channels[idx], "其他频道")
+            print(f"将 {self.channels[idx]['name']} 从 '{old_group}' 改为 '其他频道'")
         
-        if shandong_idx < cctv4k_idx:
-            cctv4k_idx -= 1
+        # 2. 移动山东卫视到CCTV4K后面
+        shandong_indices = self.find_channel_indices(
+            name_patterns=['山东卫视'],
+            exclude_patterns=['山东卫视高清']  # 排除可能的高清频道
+        )
         
-        insert_position = cctv4k_idx + 1
-        self.channels.insert(insert_position, shandong_channel)
+        cctv4k_indices = self.find_channel_indices(
+            name_patterns=['CCTV4K', 'CCTV-4K']
+        )
         
-        print(f"已将山东卫视移动到CCTV4K后面 (新位置: {insert_position})")
-        return True
+        if shandong_indices and cctv4k_indices:
+            shandong_idx = shandong_indices[0]
+            cctv4k_idx = cctv4k_indices[0]
+            
+            if shandong_idx != cctv4k_idx + 1:
+                shandong_channel = self.channels.pop(shandong_idx)
+                
+                if shandong_idx < cctv4k_idx:
+                    cctv4k_idx -= 1
+                
+                insert_position = cctv4k_idx + 1
+                self.channels.insert(insert_position, shandong_channel)
+                print(f"已将山东卫视移动到CCTV4K后面 (位置: {insert_position})")
+        
+        # 3. 将CCTV4欧洲和美洲置于山东卫视之后
+        cctv4_overseas_indices = self.find_channel_indices(
+            name_patterns=['CCTV4欧洲', 'CCTV4美洲', 'CCTV4欧', 'CCTV4美'],
+            exclude_patterns=['CCTV4', 'CCTV-4']  # 排除普通的CCTV4
+        )
+        
+        # 重新查找山东卫视的新位置
+        shandong_new_indices = self.find_channel_indices(['山东卫视'])
+        
+        if shandong_new_indices and cctv4_overseas_indices:
+            shandong_idx = shandong_new_indices[0]
+            
+            # 将海外CCTV4频道移动到山东卫视后面
+            moved_count = 0
+            for overseas_idx in sorted(cctv4_overseas_indices, reverse=True):
+                if overseas_idx > shandong_idx:
+                    # 如果已经在山东卫视后面，跳过
+                    continue
+                
+                overseas_channel = self.channels.pop(overseas_idx)
+                insert_position = shandong_idx + 1 + moved_count
+                self.channels.insert(insert_position, overseas_channel)
+                print(f"已将 {overseas_channel['name']} 移动到山东卫视后面 (位置: {insert_position})")
+                moved_count += 1
+        
+        # 4. 处理广播频道
+        radio_indices = self.find_channel_indices(
+            name_patterns=['山东经济广播', '山东交通广播', '山东广播'],
+            group_patterns=None
+        )
+        
+        # 将广播频道移到末尾并更改分组
+        radio_channels = []
+        for idx in sorted(radio_indices, reverse=True):
+            radio_channel = self.channels.pop(idx)
+            self.update_group_title(radio_channel, "广播频道")
+            radio_channels.insert(0, radio_channel)  # 保持原有顺序
+        
+        # 将广播频道添加到列表末尾
+        self.channels.extend(radio_channels)
+        
+        for channel in radio_channels:
+            print(f"已将 {channel['name']} 移动到末尾并改为'广播频道'")
+        
+        print("频道处理完成")
     
     def generate_m3u_content(self):
         """生成新的M3U内容"""
@@ -143,7 +241,11 @@ class M3UProcessor:
 # Generated by GitHub Actions
 # Source: {self.source_url}
 # Processed at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-# 山东卫视已移动到CCTV4K频道后面
+# 处理规则:
+# 1. CGTN频道改为"其他频道"
+# 2. 山东卫视移动到CCTV4K后面
+# 3. CCTV4欧洲/美洲移动到山东卫视后面
+# 4. 广播频道移到末尾并改为"广播频道"
 
 """
         
@@ -163,7 +265,6 @@ class M3UProcessor:
             # 检查源文件是否发生变化
             if not self.has_source_changed(content):
                 print("源文件没有变化，跳过处理")
-                # 创建空文件或保持原文件
                 if not os.path.exists(self.output_file):
                     with open(self.output_file, 'w', encoding='utf-8') as f:
                         f.write("# 源文件没有变化，保持原样\n")
@@ -173,11 +274,8 @@ class M3UProcessor:
             self.parse_m3u(content)
             print(f"解析完成，共 {len(self.channels)} 个频道")
             
-            # 移动频道
-            success = self.move_channel_after_target(
-                source_keywords=['山东卫视', '山东台'],
-                target_keywords=['CCTV4K', 'CCTV-4K']
-            )
+            # 执行所有处理规则
+            self.process_channels()
             
             # 生成新内容并保存
             new_content = self.generate_m3u_content()
