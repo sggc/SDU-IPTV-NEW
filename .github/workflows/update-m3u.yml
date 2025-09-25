@@ -2,7 +2,6 @@ name: Update M3U Playlist
 
 on:
   schedule:
-    # 增加检查频率，比如每小时检查一次
     - cron: '0 */1 * * *'  # 每小时运行一次
   workflow_dispatch:
   push:
@@ -37,8 +36,8 @@ jobs:
         
     - name: Commit and push changes if source changed
       run: |
-        # 检查是否有文件变化
-        if git diff --name-only HEAD^ HEAD | grep -q "playlist.m3u\|source_hash.txt"; then
+        # 检查工作区是否有文件变化
+        if git status --porcelain | grep -q -E "playlist.m3u|source_hash.txt"; then
           echo "检测到源文件变化，提交更改"
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
