@@ -131,54 +131,79 @@ class M3UProcessor:
         channel['group_title'] = new_group_title
         return new_extinf
     
-    def find_channel_indices(self, name_patterns, group_patterns=None, exclude_patterns=None):
+    def find_channel_index(self, name_patterns, exact_match=False):
         """查找匹配的频道索引"""
+        for i, channel in enumerate(self.channels):
+            if exact_match:
+                # 精确匹配
+                if any(pattern == channel['name'] for pattern in name_patterns):
+                    return i
+            else:
+                # 模糊匹配
+                if any(pattern in channel['name'] for pattern in name_patterns):
+                    return i
+        return -1
+    
+    def find_all_channel_indices(self, name_patterns, exact_match=False):
+        """查找所有匹配的频道索引"""
         indices = []
         for i, channel in enumerate(self.channels):
-            name_match = any(pattern in channel['name'] for pattern in name_patterns)
-            
-            group_match = True
-            if group_patterns:
-                group_match = any(pattern in (channel['group_title'] or '') for pattern in group_patterns)
-            
-            exclude_match = False
-            if exclude_patterns:
-                exclude_match = any(pattern in channel['name'] for pattern in exclude_patterns)
-            
-            if name_match and group_match and not exclude_match:
-                indices.append(i)
-        
+            if exact_match:
+                if any(pattern == channel['name'] for pattern in name_patterns):
+                    indices.append(i)
+            else:
+                if any(pattern in channel['name'] for pattern in name_patterns):
+                    indices.append(i)
         return indices
+    
+    def move_channels_after_target(self, source_patterns, target_pattern, exact_match=False):
+        """将源频道移动到目标频道之后"""
+        # 查找目标频道（山东少儿）
+        target_idx = self.find_channel_index([target_pattern], exact_match=exact_match)
+        if target_idx == -1:
+            print(f"警告: 未找到目标频道 '{target_pattern}'")
+            return False
+        
+        # 查找源频道（CCTV4欧洲、CCTV4美洲）
+        source_indices = self.find_all_channel_indices(source_patterns, exact_match=exact_match)
+        if not source_indices:
+            print(f"警告: 未找到源频道 {source_patterns}")
+            return False
+        
+        print(f"找到目标频道 '{target_pattern}' 在位置 {target_idx}")
+        print(f"找到源频道 {source_patterns} 在位置 {source_indices}")
+        
+        # 收集要移动的频道
+        channels_to_move = []
+        for idx in sorted(source_indices, reverse=True):
+            channel = self.channels.pop(idx)
+            channels_to_move.insert(0, channel)  # 保持原有顺序
+        
+        # 在目标频道后面插入
+        insert_position = target_idx + 1
+        for channel in channels_to_move:
+            self.channels.insert(insert_position, channel)
+            print(f"已将 {channel['name']} 移动到 {target_pattern} 后面 (位置: {insert_position})")
+            insert_position += 1
+        
+        return True
     
     def process_channels(self):
         """主处理逻辑"""
         print("开始处理频道排序和分类...")
         
         # 1. 将CGTN相关频道改为"其他频道"
-        cgtn_indices = self.find_channel_indices(
-            name_patterns=['CGTN'],
-            group_patterns=None  # 不限制原分组
-        )
-        
+        cgtn_indices = self.find_all_channel_indices(['CGTN'])
         for idx in cgtn_indices:
             old_group = self.channels[idx]['group_title'] or '未知分组'
             self.update_group_title(self.channels[idx], "其他频道")
             print(f"将 {self.channels[idx]['name']} 从 '{old_group}' 改为 '其他频道'")
         
         # 2. 移动山东卫视到CCTV4K后面
-        shandong_indices = self.find_channel_indices(
-            name_patterns=['山东卫视'],
-            exclude_patterns=['山东卫视高清']  # 排除可能的高清频道
-        )
+        shandong_idx = self.find_channel_index(['山东卫视'])
+        cctv4k_idx = self.find_channel_index(['CCTV4K', 'CCTV-4K'])
         
-        cctv4k_indices = self.find_channel_indices(
-            name_patterns=['CCTV4K', 'CCTV-4K']
-        )
-        
-        if shandong_indices and cctv4k_indices:
-            shandong_idx = shandong_indices[0]
-            cctv4k_idx = cctv4k_indices[0]
-            
+        if shandong_idx != -1 and cctv4k_idx != -1:
             if shandong_idx != cctv4k_idx + 1:
                 shandong_channel = self.channels.pop(shandong_idx)
                 
@@ -189,49 +214,27 @@ class M3UProcessor:
                 self.channels.insert(insert_position, shandong_channel)
                 print(f"已将山东卫视移动到CCTV4K后面 (位置: {insert_position})")
         
-        # 3. 将CCTV4欧洲和美洲置于山东卫视之后
-        cctv4_overseas_indices = self.find_channel_indices(
-            name_patterns=['CCTV4欧洲', 'CCTV4美洲', 'CCTV4欧', 'CCTV4美'],
-            exclude_patterns=['CCTV4', 'CCTV-4']  # 排除普通的CCTV4
+        # 3. 将CCTV4欧洲和美洲移动到山东少儿之后
+        self.move_channels_after_target(
+            source_patterns=['CCTV4欧洲', 'CCTV4美洲'],
+            target_pattern='山东少儿',
+            exact_match=False
         )
         
-        # 重新查找山东卫视的新位置
-        shandong_new_indices = self.find_channel_indices(['山东卫视'])
+        # 4. 处理山东经济广播（只处理这一个广播频道）
+        shandong_economic_radio_idx = self.find_channel_index(['山东经济广播'], exact_match=True)
         
-        if shandong_new_indices and cctv4_overseas_indices:
-            shandong_idx = shandong_new_indices[0]
-            
-            # 将海外CCTV4频道移动到山东卫视后面
-            moved_count = 0
-            for overseas_idx in sorted(cctv4_overseas_indices, reverse=True):
-                if overseas_idx > shandong_idx:
-                    # 如果已经在山东卫视后面，跳过
-                    continue
-                
-                overseas_channel = self.channels.pop(overseas_idx)
-                insert_position = shandong_idx + 1 + moved_count
-                self.channels.insert(insert_position, overseas_channel)
-                print(f"已将 {overseas_channel['name']} 移动到山东卫视后面 (位置: {insert_position})")
-                moved_count += 1
-        
-        # 4. 处理广播频道
-        radio_indices = self.find_channel_indices(
-            name_patterns=['山东经济广播', '山东交通广播', '山东广播'],
-            group_patterns=None
-        )
-        
-        # 将广播频道移到末尾并更改分组
-        radio_channels = []
-        for idx in sorted(radio_indices, reverse=True):
-            radio_channel = self.channels.pop(idx)
+        if shandong_economic_radio_idx != -1:
+            # 更改分组为"广播频道"
+            radio_channel = self.channels[shandong_economic_radio_idx]
+            old_group = radio_channel['group_title'] or '未知分组'
             self.update_group_title(radio_channel, "广播频道")
-            radio_channels.insert(0, radio_channel)  # 保持原有顺序
-        
-        # 将广播频道添加到列表末尾
-        self.channels.extend(radio_channels)
-        
-        for channel in radio_channels:
-            print(f"已将 {channel['name']} 移动到末尾并改为'广播频道'")
+            print(f"将 {radio_channel['name']} 从 '{old_group}' 改为 '广播频道'")
+            
+            # 移动到列表末尾
+            radio_channel = self.channels.pop(shandong_economic_radio_idx)
+            self.channels.append(radio_channel)
+            print(f"已将 {radio_channel['name']} 移动到列表末尾")
         
         print("频道处理完成")
     
@@ -244,8 +247,8 @@ class M3UProcessor:
 # 处理规则:
 # 1. CGTN频道改为"其他频道"
 # 2. 山东卫视移动到CCTV4K后面
-# 3. CCTV4欧洲/美洲移动到山东卫视后面
-# 4. 广播频道移到末尾并改为"广播频道"
+# 3. CCTV4欧洲/美洲移动到山东少儿之后
+# 4. 山东经济广播移到末尾并改为"广播频道"
 
 """
         
