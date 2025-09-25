@@ -2,13 +2,12 @@ name: Update M3U Playlist
 
 on:
   schedule:
-    # 每天UTC时间2点运行（北京时间10点）
-    - cron: '0 2 * * *'
-  workflow_dispatch: # 允许手动触发
+    # 增加检查频率，比如每小时检查一次
+    - cron: '0 */1 * * *'  # 每小时运行一次
+  workflow_dispatch:
   push:
     branches: [ main, master ]
 
-# 添加权限设置
 permissions:
   contents: write
 
@@ -20,7 +19,6 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
       with:
-        # 移除token参数，使用默认权限
         fetch-depth: 0
         
     - name: Set up Python
@@ -37,10 +35,16 @@ jobs:
       run: |
         python scripts/process_m3u.py
         
-    - name: Commit and push changes
+    - name: Commit and push changes if source changed
       run: |
-        git config --local user.email "action@github.com"
-        git config --local user.name "GitHub Action"
-        git add .
-        git commit -m "Auto-update: 移动山东卫视到CCTV4K后面 $(date +'%Y-%m-%d %H:%M:%S')" || echo "No changes to commit"
-        git push origin main
+        # 检查是否有文件变化
+        if git diff --name-only HEAD^ HEAD | grep -q "playlist.m3u\|source_hash.txt"; then
+          echo "检测到源文件变化，提交更改"
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add .
+          git commit -m "Auto-update: 检测到源文件变化，更新播放列表 $(date +'%Y-%m-%d %H:%M:%S')"
+          git push origin main
+        else
+          echo "源文件没有变化，跳过提交"
+        fi
