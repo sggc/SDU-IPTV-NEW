@@ -1,0 +1,139 @@
+name: Auto Release on Changes
+
+on:
+  push:
+    branches: [ main, master ]
+    paths:
+      - '**'  # 监控所有文件变化
+      - '!.github/**'  # 排除.github目录自身的变化避免循环触发
+
+jobs:
+  check-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      has-changes: ${{ steps.check.outputs.has_changes }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          
+      - name: Check for file changes
+        id: check
+        uses: dorny/paths-filter@v2
+        with:
+          filters: |
+            has_changes:
+              - '**'
+              - '!.github/**'
+
+  create-release:
+    needs: check-changes
+    if: needs.check-changes.outputs.has-changes == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+          
+      - name: Setup release version
+        id: setup
+        run: |
+          # 获取当前日期（简化格式，去掉前导零）
+          CURRENT_DATE=$(date +"%Y.%-m.%-d")
+          
+          # 获取今天已有的发布数量（匹配新格式）
+          TODAY_RELEASES=$(gh api repos/${{ github.repository }}/releases --jq ".[] | select(.tag_name | startswith(\"$CURRENT_DATE-\")) | .tag_name" | wc -l)
+          
+          # 计算新发布的序号
+          RELEASE_NUMBER=$((TODAY_RELEASES + 1))
+          
+          # 生成发布名称和标签
+          RELEASE_NAME="$CURRENT_DATE-r$RELEASE_NUMBER"
+          RELEASE_TAG="$RELEASE_NAME"
+          
+          echo "RELEASE_NAME=$RELEASE_NAME" >> $GITHUB_OUTPUT
+          echo "RELEASE_TAG=$RELEASE_TAG" >> $GITHUB_OUTPUT
+          echo "RELEASE_DATE=$CURRENT_DATE" >> $GITHUB_OUTPUT
+          echo "RELEASE_NUMBER=$RELEASE_NUMBER" >> $GITHUB_OUTPUT
+          echo "准备创建发布: $RELEASE_NAME"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          
+      - name: Get changed files
+        id: changed_files
+        run: |
+          # 获取变更的文件列表
+          if [ "${{ github.event.before }}" = "0000000000000000000000000000000000000000" ]; then
+            # 初始提交的情况
+            echo "变更类型: 初始提交"
+            echo "FILES_CHANGED=$(git show --pretty=format: --name-only ${{ github.sha }} | tr '\n' ',' | sed 's/,$//')" >> $GITHUB_OUTPUT
+          else
+            # 普通提交的情况
+            echo "变更类型: 普通提交"
+            echo "FILES_CHANGED=$(git diff --name-only ${{ github.event.before }} ${{ github.sha }} | tr '\n' ',' | sed 's/,$//')" >> $GITHUB_OUTPUT
+          fi
+          
+      - name: Generate release notes
+        id: release_notes
+        run: |
+          # 生成详细的发布说明
+          NOTES="# 版本 ${{ steps.setup.outputs.RELEASE_NAME }}
+
+**发布信息**
+- **版本号:** ${{ steps.setup.outputs.RELEASE_NAME }}
+- **发布时间:** $(date)
+- **提交哈希:** [${{ github.sha }}](https://github.com/${{ github.repository }}/commit/${{ github.sha }})
+- **提交信息:** ${{ github.event.head_commit.message }}
+
+## 变更文件列表
+"
+
+          # 添加变更文件列表
+          IFS=',' read -ra FILES <<< "${{ steps.changed_files.outputs.FILES_CHANGED }}"
+          FILE_COUNT=0
+          for file in "${FILES[@]}"; do
+            if [ -n "$file" ]; then
+              NOTES="$NOTES
+- \`$file\`"
+              FILE_COUNT=$((FILE_COUNT + 1))
+            fi
+          done
+          
+          if [ $FILE_COUNT -eq 0 ]; then
+            NOTES="$NOTES
+> 未检测到具体文件变更"
+          else
+            NOTES="$NOTES
+
+> 共检测到 $FILE_COUNT 个文件变更"
+          fi
+          
+          NOTES="$NOTES
+
+---
+
+*此版本由 GitHub Actions 自动创建*"
+          
+          # 保存到文件供后续步骤使用
+          echo "$NOTES" > release_notes.md
+          echo "生成发布说明完成，共 $FILE_COUNT 个变更文件"
+          
+      - name: Create Release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.setup.outputs.RELEASE_TAG }}
+          release_name: ${{ steps.setup.outputs.RELEASE_NAME }}
+          body_path: release_notes.md
+          draft: false
+          prerelease: false
+
+      - name: Show release info
+        run: |
+          echo "✅ 发布创建成功: ${{ steps.setup.outputs.RELEASE_NAME }}"
+          echo "📎 发布页面: https://github.com/${{ github.repository }}/releases/tag/${{ steps.setup.outputs.RELEASE_TAG }}"
