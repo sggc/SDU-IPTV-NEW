@@ -1,4 +1,4 @@
-name: Auto Archive Release with File Packaging
+name: Auto Packaging
 
 on:
   push:
@@ -62,24 +62,30 @@ jobs:
         if [ -n "$M3U_FILES" ]; then
           M3U_CHANGED=true
           echo "检测到M3U文件变动: $M3U_FILES"
+          # 将多行文件列表转换为单行，用逗号分隔
+          M3U_FILES_SINGLE_LINE=$(echo "$M3U_FILES" | tr '\n' ',' | sed 's/,$//')
+        else
+          M3U_FILES_SINGLE_LINE=""
         fi
         
-        # 输出到GITHUB_OUTPUT
+        # 将CHANGED_FILES也转换为单行
+        CHANGED_FILES_SINGLE_LINE=$(echo "$CHANGED_FILES" | tr '\n' ',' | sed 's/,$//')
+        if [ -z "$CHANGED_FILES_SINGLE_LINE" ]; then
+          CHANGED_FILES_SINGLE_LINE="无重要文件变更"
+        fi
+        
+        # 输出到GITHUB_OUTPUT - 使用单行格式
         echo "release_name=$RELEASE_NAME" >> $GITHUB_OUTPUT
         echo "file_name=$FILE_NAME" >> $GITHUB_OUTPUT
         echo "current_datetime=$CURRENT_DATETIME" >> $GITHUB_OUTPUT
         echo "m3u_changed=$M3U_CHANGED" >> $GITHUB_OUTPUT
-        echo "m3u_files=$M3U_FILES" >> $GITHUB_OUTPUT
-        
-        if [ -n "$CHANGED_FILES" ]; then
-          echo "changed_files=$CHANGED_FILES" >> $GITHUB_OUTPUT
-        else
-          echo "changed_files=无重要文件变更" >> $GITHUB_OUTPUT
-        fi
+        echo "m3u_files=$M3U_FILES_SINGLE_LINE" >> $GITHUB_OUTPUT
+        echo "changed_files=$CHANGED_FILES_SINGLE_LINE" >> $GITHUB_OUTPUT
         
         echo "Release名称: $RELEASE_NAME"
         echo "文件名: $FILE_NAME"
         echo "M3U文件变动: $M3U_CHANGED"
+        echo "M3U文件列表: $M3U_FILES_SINGLE_LINE"
     
     - name: Create full repository archive
       if: steps.check-commit.outputs.is_automated == 'false'
@@ -91,23 +97,21 @@ jobs:
         echo "已创建完整存档: $ARCHIVE_NAME"
     
     - name: Prepare release assets
-      if: steps.check-commit.outputs.is_automated == 'false'
+      if: steps.check-commit.outputs.is_automated == 'false' && steps.release-info.outputs.m3u_changed == 'true'
       run: |
         # 准备要发布的文件列表
         ASSETS="${{ env.ARCHIVE_NAME }}"
         
-        # 如果有变动的m3u文件，直接添加到发布文件列表
-        if [ "${{ steps.release-info.outputs.m3u_changed }}" == "true" ]; then
-          # 将m3u文件逐个添加到ASSETS列表
-          IFS=$'\n'  # 设置分隔符为换行符
-          for file in ${{ steps.release-info.outputs.m3u_files }}; do
-            if [ -f "$file" ]; then
-              ASSETS="$ASSETS,$file"
-              echo "添加M3U文件: $file"
-            fi
-          done
-          unset IFS
-        fi
+        # 将逗号分隔的文件列表转换回换行分隔
+        M3U_FILES=$(echo "${{ steps.release-info.outputs.m3u_files }}" | tr ',' '\n')
+        
+        # 添加M3U文件到发布列表
+        for file in $M3U_FILES; do
+          if [ -f "$file" ]; then
+            ASSETS="$ASSETS,$file"
+            echo "添加M3U文件到发布列表: $file"
+          fi
+        done
         
         echo "ASSETS=$ASSETS" >> $GITHUB_ENV
         echo "将要发布的文件: $ASSETS"
@@ -121,7 +125,9 @@ jobs:
         echo "" >> release_body.md
         echo "## 变更文件" >> release_body.md
         echo "\`\`\`" >> release_body.md
-        echo "${{ steps.release-info.outputs.changed_files }}" >> release_body.md
+        # 将逗号分隔的列表转换回可读格式
+        CHANGED_FILES_READABLE=$(echo "${{ steps.release-info.outputs.changed_files }}" | tr ',' '\n')
+        echo "$CHANGED_FILES_READABLE" >> release_body.md
         echo "\`\`\`" >> release_body.md
         echo "" >> release_body.md
         echo "## 包含的文件" >> release_body.md
@@ -133,7 +139,8 @@ jobs:
           echo "## 单独发布的M3U文件" >> release_body.md
           echo "以下M3U文件已单独发布（保持原文件名）：" >> release_body.md
           echo "\`\`\`" >> release_body.md
-          echo "${{ steps.release-info.outputs.m3u_files }}" >> release_body.md
+          M3U_FILES_READABLE=$(echo "${{ steps.release-info.outputs.m3u_files }}" | tr ',' '\n')
+          echo "$M3U_FILES_READABLE" >> release_body.md
           echo "\`\`\`" >> release_body.md
         fi
         
