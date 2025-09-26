@@ -1,10 +1,10 @@
-name: Auto Archive Release
+name: Auto Archive Release with File Packaging
 
 on:
   push:
     branches: [ main, master ]
     paths:
-      - '**'  # 可以修改为特定路径，如 'src/**', 'docs/**' 等
+      - '**'  # 监控所有文件变动
 
 jobs:
   create-release:
@@ -17,60 +17,117 @@ jobs:
       with:
         fetch-depth: 0
     
-    - name: Check for meaningful changes
-      id: check-changes
+    - name: Detect changes and generate release info
+      id: release-info
       run: |
-        # 排除某些不需要触发release的文件
-        EXCLUDE_PATTERNS="README.md|.gitignore|.github/*"
-        
-        # 获取变更文件列表
-        CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD | grep -vE "$EXCLUDE_PATTERNS" || true)
-        
-        if [ -n "$CHANGED_FILES" ]; then
-          echo "has_changes=true" >> $GITHUB_OUTPUT
-          echo "changed_files<<EOF" >> $GITHUB_OUTPUT
-          echo "$CHANGED_FILES" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-          echo "检测到文件变动"
-        else
-          echo "has_changes=false" >> $GITHUB_OUTPUT
-          echo "无重要文件变动，跳过release"
-        fi
-    
-    - name: Generate archive name
-      if: steps.check-changes.outputs.has_changes == 'true'
-      id: generate-name
-      run: |
+        # 获取当前日期和时间
         CURRENT_DATE=$(date +'%Y.%-m.%-d')
         CURRENT_DATETIME=$(date +'%Y-%m-%d %H:%M:%S')
         
         # 获取所有tag，统计今天的release数量
         git fetch --tags -f
         EXISTING_RELEASES=$(git tag -l "存档$CURRENT_DATE-r*" | wc -l)
-        
         NEW_VERSION=$((EXISTING_RELEASES + 1))
         RELEASE_NAME="存档$CURRENT_DATE-r$NEW_VERSION"
         
+        # 检测文件变动
+        CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD | grep -vE "README.md|.gitignore" | head -20)
+        
+        # 检查playlist.m3u是否变动
+        PLAYLIST_CHANGED=false
+        if echo "$CHANGED_FILES" | grep -q "playlist.m3u"; then
+          PLAYLIST_CHANGED=true
+        fi
+        
+        # 输出到GITHUB_OUTPUT
         echo "release_name=$RELEASE_NAME" >> $GITHUB_OUTPUT
         echo "current_datetime=$CURRENT_DATETIME" >> $GITHUB_OUTPUT
-        echo "归档版本: $RELEASE_NAME"
+        echo "playlist_changed=$PLAYLIST_CHANGED" >> $GITHUB_OUTPUT
+        
+        # 创建变更文件列表（用于release说明）
+        if [ -n "$CHANGED_FILES" ]; then
+          echo "changed_files<<EOF" >> $GITHUB_OUTPUT
+          echo "$CHANGED_FILES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+        else
+          echo "changed_files=无重要文件变更" >> $GITHUB_OUTPUT
+        fi
+        
+        echo "Release名称: $RELEASE_NAME"
+        echo "Playlist变动: $PLAYLIST_CHANGED"
     
-    - name: Create Archive Release
-      if: steps.check-changes.outputs.has_changes == 'true'
+    - name: Create full repository archive
+      run: |
+        # 创建完整仓库压缩包
+        ARCHIVE_NAME="完整存档-${{ steps.release-info.outputs.release_name }}.zip"
+        zip -r "$ARCHIVE_NAME" . -x "*.git*" "*.github*" "*.zip" "*.tar.gz"
+        echo "archive_name=$ARCHIVE_NAME" >> $GITHUB_ENV
+        echo "已创建完整存档: $ARCHIVE_NAME"
+    
+    - name: Create playlist archive (if changed)
+      if: steps.release-info.outputs.playlist_changed == 'true'
+      run: |
+        # 创建playlist单独压缩包
+        PLAYLIST_ARCHIVE_NAME="playlist-${{ steps.release-info.outputs.release_name }}.zip"
+        if [ -f "playlist.m3u" ]; then
+          zip "$PLAYLIST_ARCHIVE_NAME" "playlist.m3u"
+          echo "playlist_archive_name=$PLAYLIST_ARCHIVE_NAME" >> $GITHUB_ENV
+          echo "已创建playlist存档: $PLAYLIST_ARCHIVE_NAME"
+        else
+          echo "playlist.m3u文件不存在，跳过创建单独存档"
+        fi
+    
+    - name: Prepare release assets
+      run: |
+        # 准备要发布的文件列表
+        ASSETS="${{ env.archive_name }}"
+        
+        if [ -n "${{ env.playlist_archive_name }}" ]; then
+          ASSETS="$ASSETS ${{ env.playlist_archive_name }}"
+        fi
+        
+        echo "assets=$ASSETS" >> $GITHUB_ENV
+        echo "将要发布的文件: $ASSETS"
+    
+    - name: Create release body
+      run: |
+        cat > release_body.md << EOF
+# ${{ steps.release-info.outputs.release_name }}
+
+自动生成的存档版本
+
+## 变更文件
+\`\`\`
+${{ steps.release-info.outputs.changed_files }}
+\`\`\`
+
+## 包含的存档文件
+- **${{ env.archive_name }}**: 完整仓库存档
+
+$([ -n "${{ env.playlist_archive_name }}" ] && echo "- **${{ env.playlist_archive_name }}**: 单独playlist.m3u文件存档")
+
+## 生成信息
+- **生成时间**: ${{ steps.release-info.outputs.current_datetime }}
+- **提交信息**: ${{ github.event.head_commit.message || '无提交信息' }}
+- **提交哈希**: ${{ github.sha }}
+
+EOF
+    
+    - name: Create GitHub Release
       uses: softprops/action-gh-release@v1
       with:
-        tag_name: ${{ steps.generate-name.outputs.release_name }}
-        name: ${{ steps.generate-name.outputs.release_name }}
-        body: |
-          自动生成的存档版本
-          
-          变更文件:
-          ${{ steps.check-changes.outputs.changed_files }}
-          
-          生成时间: ${{ steps.generate-name.outputs.current_datetime }}
-          
-          提交信息: ${{ github.event.head_commit.message }}
+        tag_name: ${{ steps.release-info.outputs.release_name }}
+        name: ${{ steps.release-info.outputs.release_name }}
+        body_path: release_body.md
+        files: ${{ env.assets }}
         draft: false
         prerelease: false
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Cleanup temporary files
+      if: always()
+      run: |
+        # 清理临时文件
+        rm -f *.zip release_body.md
+        echo "已清理临时文件"
