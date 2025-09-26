@@ -60,25 +60,17 @@ jobs:
     
     - name: Create full repository archive
       run: |
-        # 创建完整仓库压缩包 - 使用新的命名格式
+        # 创建完整仓库压缩包 - 包含所有文件（包括m3u文件）
         ARCHIVE_NAME="${{ steps.release-info.outputs.file_name }}.zip"
         zip -r "$ARCHIVE_NAME" . -x "*.git*" "*.github*" "*.zip" "*.tar.gz"
         echo "ARCHIVE_NAME=$ARCHIVE_NAME" >> $GITHUB_ENV
         echo "已创建完整存档: $ARCHIVE_NAME"
     
-    - name: Create m3u files archive with renamed files
+    - name: Extract and package m3u files separately
       if: steps.release-info.outputs.m3u_changed == 'true'
       run: |
-        # 创建所有m3u文件的单独压缩包 - 使用新的命名格式
+        # 创建单独的m3u文件压缩包
         M3U_ARCHIVE_NAME="${{ steps.release-info.outputs.file_name }}-m3u.zip"
-        
-        # 获取当前日期和release版本号
-        CURRENT_DATE=$(date +'%Y-%-m-%-d')
-        RELEASE_VERSION=$(echo "${{ steps.release-info.outputs.file_name }}" | grep -o 'r[0-9]*$')
-        
-        # 创建临时目录用于存放重命名的文件
-        TEMP_DIR="temp_m3u_files"
-        mkdir -p "$TEMP_DIR"
         
         # 查找所有变动的m3u文件
         CHANGED_M3U_FILES=$(git diff --name-only HEAD~1 HEAD | grep -E "\.m3u$" || true)
@@ -87,32 +79,16 @@ jobs:
           # 将文件列表转换为数组
           readarray -t FILES <<< "$CHANGED_M3U_FILES"
           
-          # 处理每个m3u文件
+          # 添加所有变动的m3u文件到单独的压缩包（保持原文件名）
           for file in "${FILES[@]}"; do
             if [ -f "$file" ]; then
-              # 提取文件名（不包含扩展名）
-              BASENAME=$(basename "$file" .m3u)
-              # 生成新的文件名：原名-2025-9-1-r1.m3u
-              NEW_FILENAME="${BASENAME}-${CURRENT_DATE}-${RELEASE_VERSION}.m3u"
-              # 复制文件到临时目录并重命名
-              cp "$file" "$TEMP_DIR/$NEW_FILENAME"
-              echo "已重命名文件: $file -> $NEW_FILENAME"
+              zip "$M3U_ARCHIVE_NAME" "$file"
+              echo "已添加M3U文件: $file"
             fi
           done
           
-          # 将临时目录中的所有重命名文件添加到压缩包
-          if [ "$(ls -A "$TEMP_DIR")" ]; then
-            cd "$TEMP_DIR"
-            zip "../$M3U_ARCHIVE_NAME" *
-            cd ..
-            echo "M3U_ARCHIVE_NAME=$M3U_ARCHIVE_NAME" >> $GITHUB_ENV
-            echo "已创建M3U文件存档: $M3U_ARCHIVE_NAME"
-          else
-            echo "临时目录为空，未找到需要处理的M3U文件"
-          fi
-          
-          # 清理临时目录
-          rm -rf "$TEMP_DIR"
+          echo "M3U_ARCHIVE_NAME=$M3U_ARCHIVE_NAME" >> $GITHUB_ENV
+          echo "已创建单独的M3U文件存档: $M3U_ARCHIVE_NAME"
         else
           echo "未找到变动的M3U文件"
         fi
@@ -141,19 +117,17 @@ jobs:
         echo "\`\`\`" >> release_body.md
         echo "" >> release_body.md
         echo "## 包含的存档文件" >> release_body.md
-        echo "- **${{ env.ARCHIVE_NAME }}**: 完整仓库存档" >> release_body.md
+        echo "- **${{ env.ARCHIVE_NAME }}**: 完整仓库存档（包含所有文件）" >> release_body.md
         
         # 条件性添加m3u文件信息
         if [ -n "${{ env.M3U_ARCHIVE_NAME }}" ]; then
-          echo "- **${{ env.M3U_ARCHIVE_NAME }}**: 重命名后的M3U文件存档" >> release_body.md
+          echo "- **${{ env.M3U_ARCHIVE_NAME }}**: 单独提取的M3U文件（原文件名）" >> release_body.md
           echo "" >> release_body.md
-          echo "### 包含的M3U文件（已重命名）" >> release_body.md
-          # 显示重命名后的文件列表
-          echo "所有变动的M3U文件已按规则重命名：" >> release_body.md
-          echo "原名-${CURRENT_DATE}-${RELEASE_VERSION}.m3u" >> release_body.md
-          echo "" >> release_body.md
-          echo "原始文件列表：" >> release_body.md
+          echo "### 单独提取的M3U文件列表" >> release_body.md
+          echo "以下M3U文件已从仓库中单独提取并保持原文件名：" >> release_body.md
+          echo "\`\`\`" >> release_body.md
           echo "${{ steps.release-info.outputs.m3u_files }}" >> release_body.md
+          echo "\`\`\`" >> release_body.md
         fi
         
         echo "" >> release_body.md
