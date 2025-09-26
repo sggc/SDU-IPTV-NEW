@@ -23,11 +23,15 @@ jobs:
         # 排除某些不需要触发release的文件
         EXCLUDE_PATTERNS="README.md|.gitignore|.github/*"
         
-        CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD | grep -vE "$EXCLUDE_PATTERNS" | head -1)
+        # 获取变更文件列表
+        CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD | grep -vE "$EXCLUDE_PATTERNS" || true)
         
         if [ -n "$CHANGED_FILES" ]; then
           echo "has_changes=true" >> $GITHUB_OUTPUT
-          echo "检测到文件变动: $CHANGED_FILES"
+          echo "changed_files<<EOF" >> $GITHUB_OUTPUT
+          echo "$CHANGED_FILES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          echo "检测到文件变动"
         else
           echo "has_changes=false" >> $GITHUB_OUTPUT
           echo "无重要文件变动，跳过release"
@@ -38,6 +42,7 @@ jobs:
       id: generate-name
       run: |
         CURRENT_DATE=$(date +'%Y.%-m.%-d')
+        CURRENT_DATETIME=$(date +'%Y-%m-%d %H:%M:%S')
         
         # 获取所有tag，统计今天的release数量
         git fetch --tags -f
@@ -47,6 +52,7 @@ jobs:
         RELEASE_NAME="存档$CURRENT_DATE-r$NEW_VERSION"
         
         echo "release_name=$RELEASE_NAME" >> $GITHUB_OUTPUT
+        echo "current_datetime=$CURRENT_DATETIME" >> $GITHUB_OUTPUT
         echo "归档版本: $RELEASE_NAME"
     
     - name: Create Archive Release
@@ -59,9 +65,11 @@ jobs:
           自动生成的存档版本
           
           变更文件:
-          ${{ steps.check-changes.outputs.CHANGED_FILES }}
+          ${{ steps.check-changes.outputs.changed_files }}
           
-          生成时间: ${{ steps.generate-name.outputs.CURRENT_DATE }}
+          生成时间: ${{ steps.generate-name.outputs.current_datetime }}
+          
+          提交信息: ${{ github.event.head_commit.message }}
         draft: false
         prerelease: false
       env:
