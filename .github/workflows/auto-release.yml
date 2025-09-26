@@ -1,22 +1,39 @@
-name: Auto Release
+name: Auto Archive Release with File Packaging
 
 on:
   push:
     branches: [ main, master ]
+  workflow_dispatch:  # 允许手动触发
 
 jobs:
   create-release:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
       with:
         fetch-depth: 0
+        token: ${{ secrets.PAT }}  # 使用PAT而不是默认的GITHUB_TOKEN
+    
+    - name: Check if this is an automated commit
+      id: check-commit
+      run: |
+        # 检查提交信息是否包含自动化关键词
+        COMMIT_MSG="${{ github.event.head_commit.message }}"
+        if [[ "$COMMIT_MSG" == *"Auto-update"* ]] || [[ "$COMMIT_MSG" == *"自动更新"* ]]; then
+          echo "is_automated=true" >> $GITHUB_OUTPUT
+          echo "检测到自动化提交，跳过发布"
+        else
+          echo "is_automated=false" >> $GITHUB_OUTPUT
+          echo "常规提交，继续发布流程"
+        fi
     
     - name: Detect changes and generate release info
       id: release-info
+      if: steps.check-commit.outputs.is_automated == 'false'
       run: |
         # 获取当前日期和时间
         CURRENT_DATE=$(date +'%Y-%-m-%-d')
@@ -27,11 +44,17 @@ jobs:
         EXISTING_RELEASES=$(git tag -l "存档$CURRENT_DATE-r*" | wc -l)
         NEW_VERSION=$((EXISTING_RELEASES + 1))
         RELEASE_NAME="存档$CURRENT_DATE-r$NEW_VERSION"
-        # 同时生成不带空格的版本用于文件名
         FILE_NAME="存档$CURRENT_DATE-r$NEW_VERSION"
         
-        # 检测文件变动
-        CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD | grep -vE "README.md|.gitignore" | head -20)
+        # 检测文件变动 - 与最新tag比较，而不是前一次提交
+        LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+        if [ -z "$LATEST_TAG" ]; then
+          # 如果没有tag，比较最近两次提交
+          CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD | grep -vE "README.md|.gitignore" | head -20)
+        else
+          # 与最新tag比较
+          CHANGED_FILES=$(git diff --name-only $LATEST_TAG HEAD | grep -vE "README.md|.gitignore" | head -20)
+        fi
         
         # 检查是否有m3u文件变动
         M3U_CHANGED=false
@@ -59,6 +82,7 @@ jobs:
         echo "M3U文件变动: $M3U_CHANGED"
     
     - name: Create full repository archive
+      if: steps.check-commit.outputs.is_automated == 'false'
       run: |
         # 创建完整仓库压缩包
         ARCHIVE_NAME="${{ steps.release-info.outputs.file_name }}.zip"
@@ -66,51 +90,32 @@ jobs:
         echo "ARCHIVE_NAME=$ARCHIVE_NAME" >> $GITHUB_ENV
         echo "已创建完整存档: $ARCHIVE_NAME"
     
-    - name: Prepare m3u files for release
-      if: steps.release-info.outputs.m3u_changed == 'true'
-      run: |
-        # 查找所有变动的m3u文件
-        CHANGED_M3U_FILES=$(git diff --name-only HEAD~1 HEAD | grep -E "\.m3u$" || true)
-        
-        if [ -n "$CHANGED_M3U_FILES" ]; then
-          # 将文件列表转换为数组
-          readarray -t FILES <<< "$CHANGED_M3U_FILES"
-          
-          # 输出文件列表，用于后续步骤
-          M3U_FILE_LIST=""
-          for file in "${FILES[@]}"; do
-            if [ -f "$file" ]; then
-              echo "找到M3U文件: $file"
-              M3U_FILE_LIST="$M3U_FILE_LIST $file"
-            fi
-          done
-          
-          # 将文件列表保存到环境变量
-          echo "M3U_FILE_LIST=$M3U_FILE_LIST" >> $GITHUB_ENV
-          echo "已准备M3U文件列表"
-        else
-          echo "未找到变动的M3U文件"
-        fi
-    
     - name: Prepare release assets
+      if: steps.check-commit.outputs.is_automated == 'false'
       run: |
         # 准备要发布的文件列表
         ASSETS="${{ env.ARCHIVE_NAME }}"
         
         # 如果有变动的m3u文件，直接添加到发布文件列表
-        if [ -n "${{ env.M3U_FILE_LIST }}" ]; then
+        if [ "${{ steps.release-info.outputs.m3u_changed }}" == "true" ]; then
           # 将m3u文件逐个添加到ASSETS列表
-          for file in ${{ env.M3U_FILE_LIST }}; do
-            ASSETS="$ASSETS,$file"
+          IFS=$'\n'  # 设置分隔符为换行符
+          for file in ${{ steps.release-info.outputs.m3u_files }}; do
+            if [ -f "$file" ]; then
+              ASSETS="$ASSETS,$file"
+              echo "添加M3U文件: $file"
+            fi
           done
+          unset IFS
         fi
         
         echo "ASSETS=$ASSETS" >> $GITHUB_ENV
         echo "将要发布的文件: $ASSETS"
     
     - name: Create release body
+      if: steps.check-commit.outputs.is_automated == 'false'
       run: |
-        # 使用简单的echo命令逐行创建文件
+        # 创建release说明
         echo "# ${{ steps.release-info.outputs.release_name }}" > release_body.md
         echo "自动生成的存档版本" >> release_body.md
         echo "" >> release_body.md
@@ -119,11 +124,11 @@ jobs:
         echo "${{ steps.release-info.outputs.changed_files }}" >> release_body.md
         echo "\`\`\`" >> release_body.md
         echo "" >> release_body.md
-        echo "## 包含的存档文件" >> release_body.md
+        echo "## 包含的文件" >> release_body.md
         echo "- **${{ env.ARCHIVE_NAME }}**: 完整仓库存档" >> release_body.md
         
         # 条件性添加m3u文件信息
-        if [ -n "${{ env.M3U_FILE_LIST }}" ]; then
+        if [ "${{ steps.release-info.outputs.m3u_changed }}" == "true" ]; then
           echo "" >> release_body.md
           echo "## 单独发布的M3U文件" >> release_body.md
           echo "以下M3U文件已单独发布（保持原文件名）：" >> release_body.md
@@ -141,6 +146,7 @@ jobs:
         echo "已创建release说明文件"
     
     - name: Create GitHub Release
+      if: steps.check-commit.outputs.is_automated == 'false' && steps.release-info.outputs.m3u_changed == 'true'
       uses: softprops/action-gh-release@v1
       with:
         tag_name: ${{ steps.release-info.outputs.release_name }}
@@ -153,7 +159,7 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     
     - name: Cleanup temporary files
-      if: always()
+      if: always() && steps.check-commit.outputs.is_automated == 'false'
       run: |
         # 清理临时文件
         rm -f *.zip release_body.md
