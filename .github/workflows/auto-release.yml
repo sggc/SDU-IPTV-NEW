@@ -29,42 +29,64 @@ jobs:
         RELEASE_NAME="存档$CURRENT_DATE-r$NEW_VERSION"
         
         # 检测文件变动
-        CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD | grep -vE "README.md|.gitignore" | head -20 | tr '\n' ',' | sed 's/,/, /g')
+        CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD | grep -vE "README.md|.gitignore" | head -20)
         
-        # 检查playlist.m3u是否变动
-        PLAYLIST_CHANGED=false
-        if echo "$CHANGED_FILES" | grep -q "playlist.m3u"; then
-          PLAYLIST_CHANGED=true
+        # 检查是否有m3u文件变动
+        M3U_CHANGED=false
+        M3U_FILES=$(echo "$CHANGED_FILES" | grep -E "\.m3u$" || true)
+        if [ -n "$M3U_FILES" ]; then
+          M3U_CHANGED=true
+          echo "检测到M3U文件变动: $M3U_FILES"
         fi
         
         # 输出到GITHUB_OUTPUT
         echo "release_name=$RELEASE_NAME" >> $GITHUB_OUTPUT
         echo "current_datetime=$CURRENT_DATETIME" >> $GITHUB_OUTPUT
-        echo "playlist_changed=$PLAYLIST_CHANGED" >> $GITHUB_OUTPUT
-        echo "changed_files=$CHANGED_FILES" >> $GITHUB_OUTPUT
+        echo "m3u_changed=$M3U_CHANGED" >> $GITHUB_OUTPUT
+        echo "m3u_files=$M3U_FILES" >> $GITHUB_OUTPUT
+        
+        if [ -n "$CHANGED_FILES" ]; then
+          echo "changed_files=$CHANGED_FILES" >> $GITHUB_OUTPUT
+        else
+          echo "changed_files=无重要文件变更" >> $GITHUB_OUTPUT
+        fi
         
         echo "Release名称: $RELEASE_NAME"
-        echo "Playlist变动: $PLAYLIST_CHANGED"
+        echo "M3U文件变动: $M3U_CHANGED"
     
     - name: Create full repository archive
       run: |
-        # 创建完整仓库压缩包
+        # 创建完整仓库压缩包 - 修复命名问题
         ARCHIVE_NAME="完整存档-${{ steps.release-info.outputs.release_name }}.zip"
         zip -r "$ARCHIVE_NAME" . -x "*.git*" "*.github*" "*.zip" "*.tar.gz"
         echo "ARCHIVE_NAME=$ARCHIVE_NAME" >> $GITHUB_ENV
         echo "已创建完整存档: $ARCHIVE_NAME"
     
-    - name: Create playlist archive (if changed)
-      if: steps.release-info.outputs.playlist_changed == 'true'
+    - name: Create m3u files archive (if any m3u changed)
+      if: steps.release-info.outputs.m3u_changed == 'true'
       run: |
-        # 创建playlist单独压缩包
-        PLAYLIST_ARCHIVE_NAME="playlist-${{ steps.release-info.outputs.release_name }}.zip"
-        if [ -f "playlist.m3u" ]; then
-          zip "$PLAYLIST_ARCHIVE_NAME" "playlist.m3u"
-          echo "PLAYLIST_ARCHIVE_NAME=$PLAYLIST_ARCHIVE_NAME" >> $GITHUB_ENV
-          echo "已创建playlist存档: $PLAYLIST_ARCHIVE_NAME"
+        # 创建所有m3u文件的单独压缩包
+        M3U_ARCHIVE_NAME="m3u文件-${{ steps.release-info.outputs.release_name }}.zip"
+        
+        # 查找所有变动的m3u文件
+        CHANGED_M3U_FILES=$(git diff --name-only HEAD~1 HEAD | grep -E "\.m3u$" || true)
+        
+        if [ -n "$CHANGED_M3U_FILES" ]; then
+          # 将文件列表转换为数组
+          readarray -t FILES <<< "$CHANGED_M3U_FILES"
+          
+          # 添加所有变动的m3u文件到压缩包
+          for file in "${FILES[@]}"; do
+            if [ -f "$file" ]; then
+              zip "$M3U_ARCHIVE_NAME" "$file"
+              echo "已添加文件: $file"
+            fi
+          done
+          
+          echo "M3U_ARCHIVE_NAME=$M3U_ARCHIVE_NAME" >> $GITHUB_ENV
+          echo "已创建M3U文件存档: $M3U_ARCHIVE_NAME"
         else
-          echo "playlist.m3u文件不存在，跳过创建单独存档"
+          echo "未找到变动的M3U文件"
         fi
     
     - name: Prepare release assets
@@ -72,8 +94,8 @@ jobs:
         # 准备要发布的文件列表
         ASSETS="${{ env.ARCHIVE_NAME }}"
         
-        if [ -n "${{ env.PLAYLIST_ARCHIVE_NAME }}" ]; then
-          ASSETS="$ASSETS ${{ env.PLAYLIST_ARCHIVE_NAME }}"
+        if [ -n "${{ env.M3U_ARCHIVE_NAME }}" ]; then
+          ASSETS="$ASSETS,${{ env.M3U_ARCHIVE_NAME }}"
         fi
         
         echo "ASSETS=$ASSETS" >> $GITHUB_ENV
@@ -81,7 +103,7 @@ jobs:
     
     - name: Create release body
       run: |
-        # 使用简单的echo命令逐行创建文件，避免复杂的多行语法
+        # 使用简单的echo命令逐行创建文件
         echo "# ${{ steps.release-info.outputs.release_name }}" > release_body.md
         echo "自动生成的存档版本" >> release_body.md
         echo "" >> release_body.md
@@ -93,9 +115,12 @@ jobs:
         echo "## 包含的存档文件" >> release_body.md
         echo "- **${{ env.ARCHIVE_NAME }}**: 完整仓库存档" >> release_body.md
         
-        # 条件性添加playlist信息
-        if [ -n "${{ env.PLAYLIST_ARCHIVE_NAME }}" ]; then
-          echo "- **${{ env.PLAYLIST_ARCHIVE_NAME }}**: 单独playlist.m3u文件存档" >> release_body.md
+        # 条件性添加m3u文件信息
+        if [ -n "${{ env.M3U_ARCHIVE_NAME }}" ]; then
+          echo "- **${{ env.M3U_ARCHIVE_NAME }}**: 单独M3U文件存档" >> release_body.md
+          echo "" >> release_body.md
+          echo "### 包含的M3U文件" >> release_body.md
+          echo "${{ steps.release-info.outputs.m3u_files }}" >> release_body.md
         fi
         
         echo "" >> release_body.md
@@ -105,7 +130,6 @@ jobs:
         echo "- **提交哈希**: ${{ github.sha }}" >> release_body.md
         
         echo "已创建release说明文件"
-        cat release_body.md
     
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v1
