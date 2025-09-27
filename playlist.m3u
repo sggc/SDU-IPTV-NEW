@@ -3,7 +3,7 @@
 # Source: https://raw.githubusercontent.com/plsy1/iptv/refs/heads/main/unicast.m3u
 # Processed at: 2025-09-27 15:01:14
 # 处理规则:
-# 1. CGTN频道改为"其他频道"
+# 1. CGTN所有频道改为"其他频道"
 # 2. 山东卫视移动到CCTV4K后面
 # 3. CCTV4欧洲/美洲移动到山东少儿之后
 # 4. 山东经济广播移到末尾并改为"广播频道"
