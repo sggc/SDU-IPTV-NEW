@@ -199,20 +199,22 @@ class M3UProcessor:
             self.update_group_title(self.channels[idx], "其他频道")
             print(f"将 {self.channels[idx]['name']} 从 '{old_group}' 改为 '其他频道'")
         
-        # 2. 移动山东卫视到CCTV4K后面
-        shandong_idx = self.find_channel_index(['山东卫视'])
-        cctv4k_idx = self.find_channel_index(['CCTV4K', 'CCTV-4K'])
+        # 2. 复制山东卫视（不包括4K版本）到CCTV1下面，并改为"央视频道"
+        shandong_idx = self.find_channel_index(['山东卫视'], exact_match=True)
+        cctv1_idx = self.find_channel_index(['CCTV1', 'CCTV-1'])
         
-        if shandong_idx != -1 and cctv4k_idx != -1:
-            if shandong_idx != cctv4k_idx + 1:
-                shandong_channel = self.channels.pop(shandong_idx)
-                
-                if shandong_idx < cctv4k_idx:
-                    cctv4k_idx -= 1
-                
-                insert_position = cctv4k_idx + 1
-                self.channels.insert(insert_position, shandong_channel)
-                print(f"已将山东卫视移动到CCTV4K后面 (位置: {insert_position})")
+        if shandong_idx != -1 and cctv1_idx != -1:
+            # 复制山东卫视频道
+            original_shandong = self.channels[shandong_idx]
+            copied_shandong = original_shandong.copy()
+            
+            # 修改复制频道的分组为"央视频道"
+            self.update_group_title(copied_shandong, "央视频道")
+            
+            # 在CCTV1后面插入复制的频道
+            insert_position = cctv1_idx + 1
+            self.channels.insert(insert_position, copied_shandong)
+            print(f"已复制山东卫视并插入到CCTV1后面 (位置: {insert_position})，分组改为央视频道")
         
         # 3. 将CCTV4欧洲和美洲移动到山东少儿之后
         self.move_channels_after_target(
@@ -246,7 +248,7 @@ class M3UProcessor:
 # Processed at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 # 处理规则:
 # 1. CGTN频道改为"其他频道"
-# 2. 山东卫视移动到CCTV4K后面
+# 2. 复制山东卫视到CCTV1下面并改为"央视频道"
 # 3. CCTV4欧洲/美洲移动到山东少儿之后
 # 4. 山东经济广播移到末尾并改为"广播频道"
 
