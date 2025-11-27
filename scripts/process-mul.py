@@ -41,32 +41,43 @@ def parse_m3u(content):
     """解析 M3U 文件内容，返回频道列表"""
     channels = []
     lines = content.strip().split('\n')
-    channel = {}
+    channel = None
     for line in lines:
         line = line.strip()
+        if not line:
+            continue  # 忽略空行
         if line.startswith('#EXTINF:'):
-            if 'channel' in locals() and channel:
-                channels.append(channel)
+            # 保存上一个频道（如果有且包含 URL）
+            if channel is not None:
+                if 'url' in channel:
+                    channels.append(channel)
+                else:
+                    print(f"⚠️ 丢弃不完整频道（缺少 URL）: {channel.get('name', '未知')}")
+            # 开始新频道
             channel = {'info': line}
         elif line.startswith('rtp://'):
-            if 'channel' in locals():
+            if channel is not None:
                 channel['url'] = line
         else:
-            # 忽略其他内容
+            # 忽略其他内容（如 #EXTM3U、注释等）
             pass
-    if 'channel' in locals() and channel:
-        channels.append(channel)
+    # 添加最后一个频道
+    if channel is not None:
+        if 'url' in channel:
+            channels.append(channel)
+        else:
+            print(f"⚠️ 丢弃末尾不完整频道（缺少 URL）: {channel.get('name', '未知')}")
     return channels
 
 def process_channels(channels):
     """处理频道，提取地区等信息"""
     for channel in channels:
         info = channel['info']
-        # 提取地区（假设格式为 #EXTINF:...,地区 频道名）
+        # 提取频道名（#EXTINF 后面的部分）
         pos = info.rfind(',')
         if pos > 0:
             name = info[pos+1:].strip()
-            # 分离地区和频道名（假设地区在最前面，用空格分隔）
+            # 尝试分离地区和频道名（第一个空格前为地区）
             parts = name.split(' ', 1)
             if len(parts) == 2:
                 channel['region'] = parts[0]
@@ -93,15 +104,26 @@ def generate_m3u_content(channels):
     content = "#EXTM3U\n"
     # 按地区分组
     regions = {}
+    valid_count = 0
     for channel in channels:
+        if 'url' not in channel:
+            print(f"⚠️ 跳过无 URL 的频道: {channel.get('name', '未知')}")
+            continue
+        if 'info' not in channel:
+            print(f"⚠️ 跳过无 info 的频道: {channel.get('name', '未知')}")
+            continue
         region = channel['region']
         if region not in regions:
             regions[region] = []
         regions[region].append(channel)
+        valid_count += 1
+
+    print(f"✅ 共处理 {valid_count} 个有效频道（原始 {len(channels)} 个）")
+
     # 排序地区
     sorted_regions = sorted(regions.keys())
     for region in sorted_regions:
-        # 排序频道名
+        # 按频道名排序
         sorted_channels = sorted(regions[region], key=lambda x: x['name'])
         for channel in sorted_channels:
             content += f"{channel['info']}\n"
@@ -109,17 +131,19 @@ def generate_m3u_content(channels):
     return content
 
 def main():
+    print("📥 正在下载源文件...")
     content = download_file()
     if not content:
-        print("下载失败，退出")
+        print("❌ 下载失败，退出")
         return False
 
     if not has_source_changed(content):
-        print("源文件未变化，跳过处理")
+        print("🟡 源文件未变化，跳过处理")
         return True
 
+    print("🔍 正在解析 M3U 文件...")
     channels = parse_m3u(content)
-    print(f"解析完成，共 {len(channels)} 个频道")
+    print(f"📋 解析完成，共 {len(channels)} 个频道条目")
 
     channels = process_channels(channels)
     channels = modify_urls(channels)
@@ -131,16 +155,17 @@ def main():
         with open(OUTPUT_FILE, 'r', encoding='utf-8') as f:
             old_content = f.read()
         if old_content == new_content:
-            print("输出文件内容未发生变化，跳过写入。")
+            print("🟢 输出文件内容未变化，跳过写入")
             save_current_hash(content)
             return True
 
     # 写入新文件
     with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
         f.write(new_content)
-    print(f"已生成新文件：{OUTPUT_FILE}")
+    print(f"✅ 已生成新文件：{OUTPUT_FILE}")
 
     save_current_hash(content)
+    print("🎉 处理完成，准备提交变更")
     return True
 
 if __name__ == '__main__':
