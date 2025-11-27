@@ -17,6 +17,7 @@ class MulticastM3UProcessor:
         self.output_file = output_file
         self.hash_file = hash_file
         self.channels = []
+        self.extm3u_line = "#EXTM3U"  # 保存原始的EXTM3U行
     
     def get_content_hash(self, content):
         """计算内容的MD5哈希值"""
@@ -70,7 +71,10 @@ class MulticastM3UProcessor:
             if not line:
                 continue
             
+            # 保存原始的EXTM3U行（包含EPG信息）
             if line.startswith('#EXTM3U'):
+                self.extm3u_line = line
+                print(f"保留EXTM3U行: {line}")
                 continue
             
             if line.startswith('#EXTINF:'):
@@ -268,7 +272,8 @@ class MulticastM3UProcessor:
         """生成新的M3U内容"""
         now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         
-        header = f"""#EXTM3U
+        # 使用原始的EXTM3U行（保留EPG信息）
+        header = f"""{self.extm3u_line}
 # 源文件: {self.source_url}
 # 修改时间: {now}
 # 处理规则:
