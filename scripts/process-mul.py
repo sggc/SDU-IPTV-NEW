@@ -310,7 +310,7 @@ class MulticastM3UProcessor:
 # 4. 山东经济广播移到末尾并改为"广播频道"
 # 5. 回看源转换规则:
 #    rtsp://...{utc:YmdHMS}...{utcend:YmdHMS}...
-#    -> http://192.168.100.1:5140/rtsp/...${(b)yyyyMMddHHmmss}...${(e)yyyyMMddHHmmss}...&r2h-seek-offset=-28800
+#    -> http://192.168.100.1:5140/rtsp/...${{(b)yyyyMMddHHmmss}}...${{(e)yyyyMMddHHmmss}}...&r2h-seek-offset=-28800
 # 6. 直播源: 192.168.0.1 -> 192.168.100.1
 
 """
