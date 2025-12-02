@@ -233,11 +233,26 @@ class MulticastM3UProcessor:
         print("频道排序处理完成")
     
     def convert_catchup_source(self, extinf_line):
-        """转换回看源地址"""
-        # 将 rtsp://112.245.125.39:1554/... 改为 http://192.168.100.1:5140/rtsp/112.245.125.39:1554/...
+        """转换回看源地址 - 新的转换规则"""
+        # 使用正则表达式提取和转换回看源
+        def replace_catchup_source(match):
+            original_url = match.group(1)  # 原始rtsp地址
+            # 转换时间戳格式
+            # {utc:YmdHMS} -> ${(b)yyyyMMddHHmmss}
+            # {utcend:YmdHMS} -> ${(e)yyyyMMddHHmmss}
+            converted_url = original_url.replace(
+                '{utc:YmdHMS}', '${(b)yyyyMMddHHmmss}'
+            ).replace(
+                '{utcend:YmdHMS}', '${(e)yyyyMMddHHmmss}'
+            )
+            
+            # 构建新的URL
+            new_url = f"http://192.168.100.1:5140/rtsp/{converted_url}&r2h-seek-offset=-28800"
+            return f'catchup-source="{new_url}"'
+        
+        # 匹配catchup-source属性
         pattern = r'catchup-source="rtsp://([^"]+)"'
-        replacement = r'catchup-source="http://192.168.100.1:5140/rtsp/\1"'
-        return re.sub(pattern, replacement, extinf_line)
+        return re.sub(pattern, replace_catchup_source, extinf_line)
     
     def convert_live_url(self, url):
         """转换直播源地址"""
@@ -245,19 +260,25 @@ class MulticastM3UProcessor:
         return url.replace('http://192.168.0.1:5140/', 'http://192.168.100.1:5140/')
     
     def process_url_conversion(self):
-        """处理URL转换"""
+        """处理URL转换 - 包含新的回看源转换规则"""
         print("开始处理URL转换...")
         
         catchup_count = 0
         live_count = 0
         
         for channel in self.channels:
-            # 转换回看源
+            # 转换回看源（新的转换规则）
             old_extinf = channel['extinf']
             new_extinf = self.convert_catchup_source(old_extinf)
             if old_extinf != new_extinf:
                 channel['extinf'] = new_extinf
                 catchup_count += 1
+                
+                # 输出转换示例（前几个）
+                if catchup_count <= 3:
+                    print(f"回看源转换示例 {catchup_count}:")
+                    print(f"  原始: {old_extinf[:100]}...")
+                    print(f"  转换: {new_extinf[:120]}...")
             
             # 转换直播源
             old_url = channel['url']
@@ -267,6 +288,12 @@ class MulticastM3UProcessor:
                 live_count += 1
         
         print(f"URL转换完成: 回看源转换 {catchup_count} 个, 直播源转换 {live_count} 个")
+        
+        # 转换示例
+        if catchup_count > 0:
+            print("\n转换规则示例:")
+            print("  原格式: rtsp://112.245.125.39:1554/...?tvdr={utc:YmdHMS}GMT-{utcend:YmdHMS}GMT")
+            print("  新格式: http://192.168.100.1:5140/rtsp/112.245.125.39:1554/...?tvdr=${(b)yyyyMMddHHmmss}GMT-${(e)yyyyMMddHHmmss}GMT&r2h-seek-offset=-28800")
     
     def generate_m3u_content(self):
         """生成新的M3U内容"""
@@ -281,7 +308,9 @@ class MulticastM3UProcessor:
 # 2. 复制山东卫视到CCTV1下面并改为"央视频道"
 # 3. CCTV4欧洲/美洲移动到山东少儿之后
 # 4. 山东经济广播移到末尾并改为"广播频道"
-# 5. 回看源: rtsp:// -> http://192.168.100.1:5140/rtsp/
+# 5. 回看源转换规则:
+#    rtsp://...{utc:YmdHMS}...{utcend:YmdHMS}...
+#    -> http://192.168.100.1:5140/rtsp/...${(b)yyyyMMddHHmmss}...${(e)yyyyMMddHHmmss}...&r2h-seek-offset=-28800
 # 6. 直播源: 192.168.0.1 -> 192.168.100.1
 
 """
