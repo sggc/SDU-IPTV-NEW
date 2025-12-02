@@ -300,6 +300,7 @@ class MulticastM3UProcessor:
         now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         
         # 使用原始的EXTM3U行（保留EPG信息）
+        # 注意：在f-string中，双大括号{{}}会被转义为单大括号{}
         header = f"""{self.extm3u_line}
 # 源文件: {self.source_url}
 # 修改时间: {now}
@@ -309,7 +310,7 @@ class MulticastM3UProcessor:
 # 3. CCTV4欧洲/美洲移动到山东少儿之后
 # 4. 山东经济广播移到末尾并改为"广播频道"
 # 5. 回看源转换规则:
-#    rtsp://...{utc:YmdHMS}...{utcend:YmdHMS}...
+#    rtsp://...{{utc:YmdHMS}}...{{utcend:YmdHMS}}...
 #    -> http://192.168.100.1:5140/rtsp/...${{(b)yyyyMMddHHmmss}}...${{(e)yyyyMMddHHmmss}}...&r2h-seek-offset=-28800
 # 6. 直播源: 192.168.0.1 -> 192.168.100.1
 
