@@ -1,6 +1,6 @@
 #EXTM3U url-tvg="https://raw.githubusercontent.com/plsy1/epg/main/e/seven-days.xml.gz"
 # 源文件: https://raw.githubusercontent.com/plsy1/iptv/refs/heads/main/unicast.m3u
-# 修改时间: 2025-11-30 08:10:56
+# 修改时间: 2025-12-02 14:42:20
 # 处理规则:
 # 1. CGTN频道改为"其他频道"
 # 2. 复制山东卫视到CCTV1下面并改为"央视频道"
