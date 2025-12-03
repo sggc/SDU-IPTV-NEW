@@ -6,7 +6,7 @@ import os
 from datetime import datetime
 
 # ==================== 需要您修改的配置 ====================
-SOURCE_M3U_URL = "https://raw.githubusercontent.com/plsy1/iptv/refs/heads/main/unicast.m3u"
+SOURCE_M3U_URL = "https://raw.githubusercontent.com/plsy1/iptv/refs/heads/main/unicast/unicast-ku9.m3u"
 OUTPUT_FILENAME = "playlist.m3u"
 HASH_FILE = "source_hash.txt"
 # =======================================================
